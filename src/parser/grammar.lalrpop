@@ -1,0 +1,95 @@
+// Aether grammar — processed by LALRPOP
+// https://github.com/lalrpop/lalrpop
+
+use crate::parser::ast::*;
+use crate::parser::lexer::Token;
+
+grammar<'input>;
+
+// ---------------------------------------------------------------------------
+// Top-level
+// ---------------------------------------------------------------------------
+
+pub Program: Vec<Expr> = {
+    <stmts:Stmt*> => stmts,
+};
+
+Stmt: Expr = {
+    <e:Expr> ";" => e,
+};
+
+// ---------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------
+
+pub Expr: Expr = {
+    <l:Expr> "+" <r:Factor> => Expr::BinaryOp(Box::new(l), BinOp::Add, Box::new(r)),
+    <l:Expr> "@" <r:Factor> => Expr::BinaryOp(Box::new(l), BinOp::MatMul, Box::new(r)),
+    <l:Expr> "+" "lora" <r:Factor> => Expr::LoraMerge(Box::new(l), Box::new(r)),
+    Factor,
+};
+
+Factor: Expr = {
+    "tensor" <name:Ident> ":" <dtype:DType> "[" <shape:ShapeExpr> "]" "=" <init:Expr>
+        => Expr::TensorDecl(TensorDecl { name, dtype, shape, init: Some(Box::new(init)) }),
+
+    "infer" "(" <model:Ident> "," <input:Expr> ")" ":" <out_shape:ShapeExpr>
+        => Expr::InferCall(InferCall { model, input: Box::new(input), out_shape }),
+
+    "pdf.load" "(" <path:StringLit> ")"
+        => Expr::PdfLoad(PdfLoad { path }),
+
+    "reason" "<" <topic:Expr> ">" "{" <steps:SpecialistStep+> "}"
+        => Expr::ReasonChain(ReasonChain { topic: Box::new(topic), steps }),
+
+    "ethics_score" "(" <target:Expr> ")"
+        => Expr::EthicsScore(EthicsScore { target: Box::new(target) }),
+
+    "(" <e:Expr> ")" => e,
+};
+
+// ---------------------------------------------------------------------------
+// Specialist chain step
+// ---------------------------------------------------------------------------
+
+SpecialistStep: SpecialistStep = {
+    <adapter:Ident> ("->" <hidden_in:Ident>)?
+        => SpecialistStep { adapter, hidden_in },
+};
+
+// ---------------------------------------------------------------------------
+// Shapes / dtypes / atoms
+// ---------------------------------------------------------------------------
+
+ShapeExpr: ShapeExpr = {
+    // e.g. [batch, seq, 768] or [?, 512]
+    <dims:Comma<DimExpr>> => ShapeExpr { dims },
+};
+
+DimExpr: DimExpr = {
+    <n:IntLit> => DimExpr::Lit(n),
+    <s:Ident>  => DimExpr::Symbolic(s),
+    "?"        => DimExpr::Dynamic,
+};
+
+DType: DType = {
+    "f32"  => DType::F32,
+    "f16"  => DType::F16,
+    "bf16" => DType::BF16,
+    "i32"  => DType::I32,
+};
+
+// ---------------------------------------------------------------------------
+// Terminals
+// ---------------------------------------------------------------------------
+
+Ident: Ident = { <s:"ident"> => Ident(s.to_string()) };
+IntLit: i64  = { <n:"int_lit"> => n };
+StringLit: String = { <s:"string_lit"> => s.to_string() };
+
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <last:T?> => match last {
+        None    => v,
+        Some(e) => { v.push(e); v }
+    }
+};
